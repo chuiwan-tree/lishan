@@ -48,7 +48,7 @@ const YEARS = 14, AFTER = 20, H0 = 32, DROP = 2, MINPOP = 6, SMALLDIE = 0.3;
 let seed = (Date.now() % 100000) | 0;
 function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
 
-let g, pop, yr, sel, over, leaving, seen, everGone, lastSeen;
+let g, pop, yr, sel, over, leaving, seen, everGone, lastSeen, missed = {};
 function startMap(){
   g = [];
   for (let y = 0; y < H; y++){ const row = [];
@@ -119,7 +119,7 @@ function reset(){
   startMap(); yr = 0; sel = new Set(); over = false; leaving = false;
   const comp = forestComp(); pop = {};
   for (const sp of SP){ pop[sp] = {}; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ok(sp, x, y, comp) && rnd() < .6) pop[sp][x + ',' + y] = 0; }
-  seen = {}; everGone = {}; lastSeen = {}; for (const sp of SP){ seen[sp] = count(sp); lastSeen[sp] = 0; }
+  seen = {}; everGone = {}; lastSeen = {}; missed = {}; for (const sp of SP){ seen[sp] = count(sp); lastSeen[sp] = 0; }
   document.getElementById('log').innerHTML = '';
   // 头一年先替你把能照料的照原样圈上，让人看见"本来是怎么过的"
   autoSel();
@@ -137,10 +137,11 @@ function say(html, cls){ const d = document.createElement('div'); if (cls) d.cla
 function year(){
   if (over) return;
   if (used() > handsThisYear()) return;
+  { const miss = Object.keys(pop['兰']).filter(k => { const [x, y] = k.split(',').map(Number); return pop['兰'][k] === 0 && g[y][x].t === 'C' && g[y][x].a === 3 && !sel.has(k); }).length; if (miss) missed[yr + 1] = miss; }
   grow(); live(); yr++; mark();
   const lines = []; const prevN = Object.assign({}, seen);
   for (const sp of SP){ const n = count(sp), o = seen[sp];
-    if (o > 0 && n === 0){ lines.push(ICON[sp] + ' ' + NAME[sp] + (sp === '萤' ? '今年没来' : '没了')); everGone[sp] = yr; }
+    if (o > 0 && n === 0){ lines.push(ICON[sp] + ' ' + NAME[sp] + (sp === '萤' ? '今年没来' : '没了') + (sp === '兰' && lookBack() ? '<br>' + lookBack().replace(/。$/, '') + '<br>' : '')); everGone[sp] = yr; }
     else if (o === 0 && n > 0) lines.push(ICON[sp] + ' ' + NAME[sp] + '又回来了');
     else if (n >= o * 2 && n - o >= 4) lines.push(ICON[sp] + ' ' + NAME[sp] + '多起来了（' + n + '）');
     else if (o >= 6 && n <= o / 2) lines.push(ICON[sp] + ' ' + NAME[sp] + '少了一半（' + n + '）');
@@ -150,7 +151,6 @@ function year(){
     const L = Object.keys(pop['兰']).map(k => k.split(',').map(Number));
     const due = L.filter(([x, y]) => g[y][x].t === 'C' && g[y][x].a === 3 && pop['兰'][x + ',' + y] === 0).length;
     const late = L.filter(([x, y]) => pop['兰'][x + ',' + y] > 0 && !(g[y][x].t === 'C' && g[y][x].a === 0)).length;
-    if (due) lines.push('🌸 有 ' + due + ' 块兰住的柴林今年得砍（砍过 3 年了），砍了兰熬一年就回来；拖到明年就晚了');
     if (late) lines.push('🌸 有 ' + late + ' 块的兰已经住不下了，在熬最后一年，砍也救不回来');
     for (const sp of SP){ const n = count(sp), o = prevN[sp]; if (n > 0 && n < MINPOP && (o >= MINPOP || n < o)) lines.push(ICON[sp] + ' ' + NAME[sp] + '只剩 ' + n + ' 处，这么少很容易一下断掉'); }
   }
@@ -174,11 +174,12 @@ function leave(){
     if (n >= AFTER){ clearInterval(t); over = true;
       const left = SP.filter(sp => count(sp) > 0);
       const lost = SP.filter(sp => !count(sp)).map(sp => ICON[sp] + NAME[sp] + '最后一次是第 ' + lastSeen[sp] + ' 年').join('；');
-      say('<b>第 ' + yr + ' 年，剩下：' + (left.map(sp => ICON[sp] + NAME[sp]).join('、') || '什么都没有') + '。</b>' + (lost ? '<br>' + lost + '。（你们是第 ' + YEARS + ' 年走的）' : '') + ' <a href="#" onclick="reset();return false" style="color:#8cf">再来一局</a>');
+      say('<b>第 ' + yr + ' 年，剩下：' + (left.map(sp => ICON[sp] + NAME[sp]).join('、') || '什么都没有') + '。</b>' + (lost ? '<br>' + lost + '。（你们是第 ' + YEARS + ' 年走的）' : '') + (lookBack() ? '<br>' + lookBack() : '') + ' <a href="#" onclick="reset();return false" style="color:#8cf">再来一局</a>');
       draw(); }
   }, 350);
 }
 const COL = {P: '#3d7f8f', A: '#6b6a45', M: '#9cbf5a', C: '#4f8a3c', S: '#6f7a32', F: '#1f4a25'};
+function lookBack(){ const ys = Object.keys(missed).map(Number).sort((a, b) => a - b); if (!ys.length) return ''; return '🌸 回头看兰：砍过 3 年、兰住着、那年没砍的，' + ys.map(y => '第 ' + y + ' 年 ' + missed[y] + ' 块').join('，') + '。没砍的那块第二年就太暗了。'; }
 function mark(){ for (const sp of SP) if (count(sp) > 0) lastSeen[sp] = yr; }
 function draw(){
   const cv = document.getElementById('c'), x0 = cv.getContext('2d');
@@ -207,7 +208,7 @@ function tip(p){
   const [x, y] = p, c = g[y][x]; let s = TN[c.t];
   const lan = pop['兰'][x + ',' + y];
   if (c.t === 'C'){ s += (c.a === 0 ? '，今年刚砍（兰今年住不了，能熬一年）' : '，砍过 ' + c.a + ' 年');
-    if (lan === 0 && c.a === 3) s += '。<b style="color:#ffd25a">兰住着，今年得砍：砍了它熬一年就回来，拖到明年就晚了</b>';
+    if (lan === 0 && c.a === 3) s += '。<b style="color:#ffd25a">兰住着；不砍的话明年就太暗了</b>';
     else if (lan > 0 && c.a > 0) s += '。<b style="color:#f99">兰已经住不下了，在熬最后一年，砍也救不回来</b>';
     if (c.a >= 4) s += '；再不砍明年就长成林子'; }
   else if (c.t === 'A') s += '，荒了 ' + (c.a + 1) + ' 年';
