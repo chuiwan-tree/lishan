@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>里山</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{background:#14181a;color:#dde;font:15px/1.6 -apple-system,"PingFang SC",sans-serif;margin:0;display:flex;justify-content:center}
+#wrap{width:640px;padding:16px}
+h1{font-size:20px;margin:4px 0}
+.small{color:#99a;font-size:13px}
+#top{display:flex;justify-content:space-between;align-items:baseline;margin:8px 0}
+#sp{margin:6px 0;font-size:14px}
+#sp span{display:inline-block;margin-right:12px}
+#sp .gone{color:#556;text-decoration:line-through}
+canvas{display:block;border-radius:6px;cursor:pointer;background:#222}
+button{background:#3a5;color:#fff;border:0;border-radius:6px;padding:8px 18px;font-size:15px;cursor:pointer}
+button:disabled{background:#444;color:#888;cursor:default}
+#tip{min-height:44px;margin:6px 0;font-size:14px;color:#cdd}
+#log{font-size:14px;color:#bbc;max-height:220px;overflow:auto;border-top:1px solid #333;padding-top:6px}
+#log div.y{color:#889}
+details{margin:8px 0;font-size:13px;color:#aab}
+</style></head><body><div id="wrap">
+<h1>里山</h1>
+<div class="small">你是村里最后几户人家。田要放水，草要割，柴林要砍，不管它们，几年就长回林子。萤火虫、蛙、兰这些东西，是住在你们照料出来的地方的。人一年比一年少，能照料的格子也一年比一年少。田和草是年年的活，圈上了第二年还圈着；柴林每年自己挑几块砍。点格子圈上或去掉，再点"过一年"。</div>
+<details><summary>谁住在哪（点开看）</summary>
+✨ 萤火虫：放水的田，或者刚荒一年的田，旁边要挨着树（柴林、灌丛、林）<br>
+🐸 蛙：田、荒田<br>
+🦋 蝶：割过的草地，或者刚砍过一年内的柴林<br>
+🌸 兰：砍过 1 到 3 年的柴林（太亮太暗都不行）<br>
+🌺 杜鹃：柴林、灌丛<br>
+🦅 鹰：在林子里做窝，周围三格内要有四块以上的田或草地打食<br>
+🦉 鸮：一大片连着的老林子（14 格以上、长了 6 年以上）<br>
+野东西只往挨着的格子里长（蝶、鹰、鸮走得远一点）；兰长得很慢，没了很难回来。<br>
+照料一格花一只手；把灌丛割回草地、把林子砍成柴林，要两只手。田一年不放水就荒了，荒两年变灌丛。草地两年不割、柴林五年不砍、灌丛四年，都会长成林子。
+</details>
+<div id="top"><div id="yr"></div><div><span id="hands"></span> <button id="go">过一年</button></div></div>
+<div id="sp"></div>
+<canvas id="c" width="624" height="416"></canvas>
+<div id="tip"></div>
+<div id="log"></div>
+<div class="small" style="margin-top:10px">丙做的，第 13 天。规则是我编的笨规则，不是哪本书里的；起因是一篇报道：日本乡下人走了以后，野东西不是变多，是变少。</div>
+</div>
+<script>
+const W = 12, H = 8, CS = 52;
+const SP = ['萤', '蛙', '蝶', '兰', '杜鹃', '鹰', '鸮'];
+const ICON = {萤: '✨', 蛙: '🐸', 蝶: '🦋', 兰: '🌸', 杜鹃: '🌺', 鹰: '🦅', 鸮: '🦉'};
+const NAME = {萤: '萤火虫', 蛙: '蛙', 蝶: '蝶', 兰: '兰', 杜鹃: '杜鹃', 鹰: '鹰', 鸮: '鸮'};
+const TN = {P: '田', A: '荒田', M: '草地', C: '柴林', S: '灌丛', F: '林'};
+const YEARS = 14, AFTER = 20, H0 = 32, DROP = 2, MINPOP = 6, SMALLDIE = 0.3;
+let seed = (Date.now() % 100000) | 0;
+function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+
+let g, pop, yr, sel, over, leaving, seen, everGone, lastSeen;
+function startMap(){
+  g = [];
+  for (let y = 0; y < H; y++){ const row = [];
+    for (let x = 0; x < W; x++){ let t;
+      if (y <= 1) t = 'F'; else if (y === 2) t = 'C'; else if (y === 3) t = x % 3 ? 'C' : 'M';
+      else if (y === 4 || y === 5) t = x % 4 ? 'P' : 'M'; else if (y === 6) t = x % 2 ? 'M' : 'C'; else t = x % 3 ? 'C' : 'F';
+      row.push({t, a: t === 'C' ? (x * 7 + y * 3) % 4 : t === 'F' ? 9 : 0}); }
+    g.push(row); }
+}
+function* nb(x, y, r = 1){ for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++)
+  if ((dx || dy) && Math.abs(dx) + Math.abs(dy) <= r && x + dx >= 0 && x + dx < W && y + dy >= 0 && y + dy < H) yield [x + dx, y + dy]; }
+function forestComp(){
+  const comp = {};
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+    if (g[y][x].t !== 'F' || comp[x + ',' + y]) continue;
+    const st = [[x, y]], cells = []; comp[x + ',' + y] = 1;
+    while (st.length){ const [a, b] = st.pop(); cells.push([a, b]);
+      for (const [c, d] of nb(a, b)) if (g[d][c].t === 'F' && !comp[c + ',' + d]){ comp[c + ',' + d] = 1; st.push([c, d]); } }
+    for (const [a, b] of cells) comp[a + ',' + b] = cells.length; }
+  return comp;
+}
+function ok(sp, x, y, comp){
+  const {t, a} = g[y][x];
+  switch (sp){
+    case '萤': return (t === 'P' || (t === 'A' && a < 1)) && [...nb(x, y)].some(([c, d]) => 'CSF'.includes(g[d][c].t));
+    case '蛙': return t === 'P' || t === 'A';
+    case '蝶': return t === 'M' || (t === 'C' && a <= 1);
+    case '兰': return t === 'C' && a >= 1 && a <= 3;
+    case '杜鹃': return t === 'C' || t === 'S';
+    case '鹰': return t === 'F' && [...nb(x, y, 3)].filter(([c, d]) => 'PM'.includes(g[d][c].t)).length >= 4;
+    case '鸮': return t === 'F' && a >= 6 && (comp[x + ',' + y] || 0) >= 14;
+  }
+}
+const SPREAD = {萤: [1, .5], 蛙: [1, .6], 蝶: [2, .7], 兰: [1, .12], 杜鹃: [1, .25], 鹰: [3, .3], 鸮: [2, .3]};
+const SEEDBANK = {兰: 1};
+function cost(t){ return 'SF'.includes(t) ? 2 : 1; }
+function handsThisYear(){ return yr < YEARS ? Math.max(0, H0 - DROP * yr) : 0; }
+function used(){ let n = 0; for (const k of sel){ const [x, y] = k.split(',').map(Number); n += cost(g[y][x].t); } return n; }
+function grow(){
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+    const c = g[y][x];
+    if (sel.has(x + ',' + y)){
+      if (c.t === 'A') c.t = 'P'; else if (c.t === 'S') c.t = 'M'; else if (c.t === 'F') c.t = 'C';
+      c.a = 0; continue; }
+    c.a++;
+    if (c.t === 'P'){ c.t = 'A'; c.a = 0; }
+    else if (c.t === 'A' && c.a >= 2){ c.t = 'S'; c.a = 0; }
+    else if (c.t === 'M' && c.a >= 2){ c.t = 'S'; c.a = 0; }
+    else if (c.t === 'C' && c.a >= 5){ c.t = 'F'; c.a = 0; }
+    else if (c.t === 'S' && c.a >= 4){ c.t = 'F'; c.a = 0; }
+  }
+}
+function live(){
+  const comp = forestComp();
+  for (const sp of SP){
+    const cur = pop[sp], nw = {};
+    for (const k in cur){ const [x, y] = k.split(',').map(Number);
+      if (ok(sp, x, y, comp)) nw[k] = 0; else if (cur[k] + 1 <= (SEEDBANK[sp] || 0)) nw[k] = cur[k] + 1; }
+    const [r, p] = SPREAD[sp];
+    for (const k in cur){ const [x, y] = k.split(',').map(Number);
+      for (const [c, d] of nb(x, y, r)) if (!((c + ',' + d) in nw) && ok(sp, c, d, comp) && rnd() < p) nw[c + ',' + d] = 0; }
+    const ks = Object.keys(nw);
+    if (ks.length > 0 && ks.length < MINPOP) for (const k of ks) if (rnd() < SMALLDIE) delete nw[k];   // 太少了容易断
+    pop[sp] = nw; }
+}
+function count(sp){ return Object.keys(pop[sp]).length; }
+function reset(){
+  startMap(); yr = 0; sel = new Set(); over = false; leaving = false;
+  const comp = forestComp(); pop = {};
+  for (const sp of SP){ pop[sp] = {}; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ok(sp, x, y, comp) && rnd() < .6) pop[sp][x + ',' + y] = 0; }
+  seen = {}; everGone = {}; lastSeen = {}; for (const sp of SP){ seen[sp] = count(sp); lastSeen[sp] = 0; }
+  document.getElementById('log').innerHTML = '';
+  // 头一年先替你把能照料的照原样圈上，让人看见"本来是怎么过的"
+  autoSel();
+  draw();
+}
+function autoSel(){
+  // 照去年的样子圈：田、草、到年头的柴林，圈到手用完为止（从谷底往外）
+  sel = new Set(); let left = handsThisYear();
+  const cells = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){ const c = g[y][x]; if ('PAM'.includes(c.t) || (c.t === 'C' && c.a >= 3)) cells.push([x, y]); }
+  cells.sort((p, q) => Math.abs(p[1] - 4.5) - Math.abs(q[1] - 4.5));
+  for (const [x, y] of cells){ const k = cost(g[y][x].t); if (k <= left){ sel.add(x + ',' + y); left -= k; } }
+}
+function say(html, cls){ const d = document.createElement('div'); if (cls) d.className = cls; d.innerHTML = html; const L = document.getElementById('log'); L.prepend(d); }
+function year(){
+  if (over) return;
+  if (used() > handsThisYear()) return;
+  grow(); live(); yr++; mark();
+  const lines = [];
+  for (const sp of SP){ const n = count(sp), o = seen[sp];
+    if (o > 0 && n === 0){ lines.push(ICON[sp] + ' ' + NAME[sp] + (sp === '萤' ? '今年没来' : '没了')); everGone[sp] = yr; }
+    else if (o === 0 && n > 0) lines.push(ICON[sp] + ' ' + NAME[sp] + '又回来了');
+    else if (n >= o * 2 && n - o >= 4) lines.push(ICON[sp] + ' ' + NAME[sp] + '多起来了（' + n + '）');
+    else if (o >= 6 && n <= o / 2) lines.push(ICON[sp] + ' ' + NAME[sp] + '少了一半（' + n + '）');
+    seen[sp] = n; }
+  const rich = SP.filter(sp => count(sp) > 0).length;
+  if (yr < YEARS){ const old = Object.keys(pop['兰']).filter(k => { const [x, y] = k.split(',').map(Number); return g[y][x].t === 'C' && g[y][x].a === 3; }).length;
+    if (old) lines.push('🌸 兰住的柴林有 ' + old + ' 块三年没砍了，再不砍明年就太暗'); }
+  const drop = yr < YEARS ? [...sel].filter(k => { const [x, y] = k.split(',').map(Number); return 'PM'.includes(g[y][x].t); }).length - handsThisYear() : 0;
+  say('<b>第 ' + yr + ' 年</b>：' + rich + ' 种。' + (lines.length ? ' ' + lines.join('，') + '。' : '') + (drop > 0 ? ' <span style="color:#f99">又走了一户，田和草就要多出 ' + drop + ' 只手的活。</span>' : ''), lines.length ? '' : 'y');
+  // 今年圈的明年照样圈着（人照老样子过），手不够了得你自己去掉几格
+  // 田和草是年年的活，明年照样圈着；砍柴是每年挑的，不自动圈
+  if (yr >= YEARS) sel = new Set();
+  else sel = new Set([...sel].filter(k => { const [x, y] = k.split(',').map(Number); return 'PM'.includes(g[y][x].t); }));
+  if (yr === YEARS){ say('<b>手用完了。你们走了。</b>后面的二十年它自己过。'); leaving = true; leave(); }
+  else if (yr < YEARS) {}
+  draw();
+}
+function leave(){
+  let n = 0; const t = setInterval(() => {
+    grow(); live(); yr++; n++; mark();
+    const lines = [];
+    for (const sp of SP){ const c = count(sp); if (seen[sp] > 0 && c === 0) lines.push(ICON[sp] + ' ' + NAME[sp] + '没了'); else if (seen[sp] === 0 && c > 0) lines.push(ICON[sp] + ' ' + NAME[sp] + '回来了'); seen[sp] = c; }
+    if (lines.length) say('第 ' + yr + ' 年：' + lines.join('，') + '。');
+    draw();
+    if (n >= AFTER){ clearInterval(t); over = true;
+      const left = SP.filter(sp => count(sp) > 0);
+      const lost = SP.filter(sp => !count(sp)).map(sp => ICON[sp] + NAME[sp] + '最后一次是第 ' + lastSeen[sp] + ' 年').join('；');
+      say('<b>第 ' + yr + ' 年，剩下：' + (left.map(sp => ICON[sp] + NAME[sp]).join('、') || '什么都没有') + '。</b>' + (lost ? '<br>' + lost + '。（你们是第 ' + YEARS + ' 年走的）' : '') + ' <a href="#" onclick="reset();return false" style="color:#8cf">再来一局</a>');
+      draw(); }
+  }, 350);
+}
+const COL = {P: '#3d7f8f', A: '#6b6a45', M: '#9cbf5a', C: '#4f8a3c', S: '#6f7a32', F: '#1f4a25'};
+function mark(){ for (const sp of SP) if (count(sp) > 0) lastSeen[sp] = yr; }
+function draw(){
+  const cv = document.getElementById('c'), x0 = cv.getContext('2d');
+  x0.clearRect(0, 0, cv.width, cv.height);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+    const c = g[y][x], px = x * CS, py = y * CS;
+    x0.fillStyle = COL[c.t]; x0.fillRect(px + 1, py + 1, CS - 2, CS - 2);
+    if (c.t === 'C'){ x0.fillStyle = 'rgba(255,255,220,' + (0.22 - c.a * 0.045) + ')'; x0.fillRect(px + 1, py + 1, CS - 2, CS - 2); }
+    if (c.t === 'P'){ x0.strokeStyle = 'rgba(200,240,255,.35)'; x0.beginPath(); for (let i = 1; i < 4; i++){ x0.moveTo(px + 6, py + i * 13); x0.lineTo(px + CS - 6, py + i * 13); } x0.stroke(); }
+    const here = SP.filter(sp => (x + ',' + y) in pop[sp] && pop[sp][x + ',' + y] === 0);
+    x0.fillStyle = '#fff'; x0.font = '15px sans-serif'; here.slice(0, 4).forEach((sp, i) => x0.fillText(ICON[sp], px + 4 + (i % 2) * 24, py + 20 + Math.floor(i / 2) * 24));
+    if (sel.has(x + ',' + y)){ x0.strokeStyle = '#ffd25a'; x0.lineWidth = 3; x0.strokeRect(px + 3, py + 3, CS - 6, CS - 6); x0.lineWidth = 1; }
+  }
+  document.getElementById('yr').innerHTML = yr < YEARS ? '第 ' + (yr + 1) + ' 年' : (over ? '第 ' + yr + ' 年，完' : '第 ' + yr + ' 年（你们走了）');
+  const hy = handsThisYear(), u = used();
+  document.getElementById('hands').innerHTML = yr < YEARS ? '今年的手：<b style="color:' + (u > hy ? '#f77' : '#ffd25a') + '">' + u + ' / ' + hy + '</b>' : '';
+  document.getElementById('go').disabled = yr >= YEARS || u > hy;
+  document.getElementById('sp').innerHTML = SP.map(sp => { const n = count(sp); return '<span class="' + (n ? '' : 'gone') + '">' + ICON[sp] + NAME[sp] + ' ' + n + '</span>'; }).join('');
+}
+const cv = document.getElementById('c');
+function cellAt(e){ const r = cv.getBoundingClientRect(); const x = Math.floor((e.clientX - r.left) * cv.width / r.width / CS), y = Math.floor((e.clientY - r.top) * cv.height / r.height / CS); return x >= 0 && x < W && y >= 0 && y < H ? [x, y] : null; }
+cv.addEventListener('click', e => { if (yr >= YEARS) return; const p = cellAt(e); if (!p) return; const k = p.join(',');
+  if (sel.has(k)) sel.delete(k); else if (used() + cost(g[p[1]][p[0]].t) <= handsThisYear()) sel.add(k); draw(); tip(p); });
+cv.addEventListener('mousemove', e => { const p = cellAt(e); if (p) tip(p); });
+function tip(p){
+  const [x, y] = p, c = g[y][x]; let s = TN[c.t];
+  if (c.t === 'C') s += (c.a === 0 ? '，今年刚砍' : '，砍过 ' + c.a + ' 年') + (c.a >= 4 ? '，再不砍明年就长成林子' : c.a === 3 ? '，兰明年就住不下了' : '');
+  else if (c.t === 'A') s += '，荒了 ' + (c.a + 1) + ' 年';
+  else if (c.t === 'F') s += '，长了 ' + c.a + ' 年';
+  else if (c.a > 0) s += '，' + c.a + ' 年没人管';
+  const what = {P: '放水', A: '重新放水', M: '割草', C: '砍', S: '割回草地（两只手）', F: '砍成柴林（两只手）'}[c.t];
+  const here = SP.filter(sp => (x + ',' + y) in pop[sp]).map(sp => ICON[sp] + NAME[sp]);
+  document.getElementById('tip').innerHTML = s + '。' + (here.length ? '住着：' + here.join(' ') + '。' : '没什么住着。') + (yr < YEARS ? ' 点一下：' + what + (sel.has(x + ',' + y) ? '（已圈上，再点取消）' : '') + '。' : '');
+}
+document.getElementById('go').onclick = year;
+reset();
+</script></body></html>
