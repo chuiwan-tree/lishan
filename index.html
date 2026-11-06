@@ -19,7 +19,7 @@ button:disabled{background:#444;color:#888;cursor:default}
 details{margin:8px 0;font-size:13px;color:#aab}
 </style></head><body><div id="wrap">
 <h1>里山</h1>
-<div class="small">你是村里最后几户人家。田要放水，草要割，柴林要砍，不管它们，几年就长回林子。萤火虫、蛙、兰这些东西，是住在你们照料出来的地方的。人一年比一年少，能照料的格子也一年比一年少。田和草是年年的活，圈上了第二年还圈着；柴林每年自己挑几块砍。点格子圈上或去掉，再点"过一年"。</div>
+<div class="small">你是村里最后几户人家。田要放水，草要割，柴林要砍，不管它们，几年就长回林子。萤火虫、蛙、兰这些东西，是住在你们照料出来的地方的。人一年比一年少，能照料的格子也一年比一年少。开局圈着的是去年人多时的活，手已经不够了，先去掉几格。田和草是年年的活，圈上了第二年还圈着；柴林每年自己挑几块砍。点格子圈上或去掉，再点"过一年"。</div>
 <details><summary>谁住在哪（点开看）</summary>
 ✨ 萤火虫：放水的田，或者刚荒一年的田，旁边要挨着树（柴林、灌丛、林）<br>
 🐸 蛙：田、荒田<br>
@@ -127,7 +127,7 @@ function reset(){
 }
 function autoSel(){
   // 照去年的样子圈：田、草、到年头的柴林，圈到手用完为止（从谷底往外）
-  sel = new Set(); let left = handsThisYear();
+  sel = new Set(); let left = 999;   // 第一年照老样子全圈上，手不够，得你自己先放掉几格
   const cells = [];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){ const c = g[y][x]; if ('PAM'.includes(c.t) || (c.t === 'C' && c.a >= 3)) cells.push([x, y]); }
   cells.sort((p, q) => Math.abs(p[1] - 4.5) - Math.abs(q[1] - 4.5));
@@ -138,7 +138,7 @@ function year(){
   if (over) return;
   if (used() > handsThisYear()) return;
   grow(); live(); yr++; mark();
-  const lines = [];
+  const lines = []; const prevN = Object.assign({}, seen);
   for (const sp of SP){ const n = count(sp), o = seen[sp];
     if (o > 0 && n === 0){ lines.push(ICON[sp] + ' ' + NAME[sp] + (sp === '萤' ? '今年没来' : '没了')); everGone[sp] = yr; }
     else if (o === 0 && n > 0) lines.push(ICON[sp] + ' ' + NAME[sp] + '又回来了');
@@ -146,10 +146,16 @@ function year(){
     else if (o >= 6 && n <= o / 2) lines.push(ICON[sp] + ' ' + NAME[sp] + '少了一半（' + n + '）');
     seen[sp] = n; }
   const rich = SP.filter(sp => count(sp) > 0).length;
-  if (yr < YEARS){ const old = Object.keys(pop['兰']).filter(k => { const [x, y] = k.split(',').map(Number); return g[y][x].t === 'C' && g[y][x].a === 3; }).length;
-    if (old) lines.push('🌸 兰住的柴林有 ' + old + ' 块三年没砍了，再不砍明年就太暗'); }
+  if (yr < YEARS){
+    const L = Object.keys(pop['兰']).map(k => k.split(',').map(Number));
+    const due = L.filter(([x, y]) => g[y][x].t === 'C' && g[y][x].a === 3 && pop['兰'][x + ',' + y] === 0).length;
+    const late = L.filter(([x, y]) => pop['兰'][x + ',' + y] > 0 && !(g[y][x].t === 'C' && g[y][x].a === 0)).length;
+    if (due) lines.push('🌸 有 ' + due + ' 块兰住的柴林今年得砍（砍过 3 年了），砍了兰熬一年就回来；拖到明年就晚了');
+    if (late) lines.push('🌸 有 ' + late + ' 块的兰已经住不下了，在熬最后一年，砍也救不回来');
+    for (const sp of SP){ const n = count(sp), o = prevN[sp]; if (n > 0 && n < MINPOP && (o >= MINPOP || n < o)) lines.push(ICON[sp] + ' ' + NAME[sp] + '只剩 ' + n + ' 处，这么少很容易一下断掉'); }
+  }
   const drop = yr < YEARS ? [...sel].filter(k => { const [x, y] = k.split(',').map(Number); return 'PM'.includes(g[y][x].t); }).length - handsThisYear() : 0;
-  say('<b>第 ' + yr + ' 年</b>：' + rich + ' 种。' + (lines.length ? ' ' + lines.join('，') + '。' : '') + (drop > 0 ? ' <span style="color:#f99">又走了一户，田和草就要多出 ' + drop + ' 只手的活。</span>' : ''), lines.length ? '' : 'y');
+  say('<b>第 ' + yr + ' 年</b>：' + rich + ' 种。' + (lines.length ? ' ' + lines.join('，') + '。' : '') + (yr < YEARS ? ' <span style="color:#f99">又走了一户，明年少 ' + DROP + ' 只手' + (drop > 0 ? '，光田和草就超了 ' + drop + ' 只' : '') + '。</span>' : ''), lines.length ? '' : 'y');
   // 今年圈的明年照样圈着（人照老样子过），手不够了得你自己去掉几格
   // 田和草是年年的活，明年照样圈着；砍柴是每年挑的，不自动圈
   if (yr >= YEARS) sel = new Set();
@@ -199,9 +205,13 @@ cv.addEventListener('click', e => { if (yr >= YEARS) return; const p = cellAt(e)
 cv.addEventListener('mousemove', e => { const p = cellAt(e); if (p) tip(p); });
 function tip(p){
   const [x, y] = p, c = g[y][x]; let s = TN[c.t];
-  if (c.t === 'C') s += (c.a === 0 ? '，今年刚砍' : '，砍过 ' + c.a + ' 年') + (c.a >= 4 ? '，再不砍明年就长成林子' : c.a === 3 ? '，兰明年就住不下了' : '');
+  const lan = pop['兰'][x + ',' + y];
+  if (c.t === 'C'){ s += (c.a === 0 ? '，今年刚砍（兰今年住不了，能熬一年）' : '，砍过 ' + c.a + ' 年');
+    if (lan === 0 && c.a === 3) s += '。<b style="color:#ffd25a">兰住着，今年得砍：砍了它熬一年就回来，拖到明年就晚了</b>';
+    else if (lan > 0 && c.a > 0) s += '。<b style="color:#f99">兰已经住不下了，在熬最后一年，砍也救不回来</b>';
+    if (c.a >= 4) s += '；再不砍明年就长成林子'; }
   else if (c.t === 'A') s += '，荒了 ' + (c.a + 1) + ' 年';
-  else if (c.t === 'F') s += '，长了 ' + c.a + ' 年';
+  else if (c.t === 'F'){ const food = [...nb(x, y, 3)].filter(([a, b]) => 'PM'.includes(g[b][a].t)).length; s += '，长了 ' + c.a + ' 年；周围三格有 ' + food + ' 块田或草地' + (food >= 4 ? '，够鹰做窝' : '，鹰要 4 块'); }
   else if (c.a > 0) s += '，' + c.a + ' 年没人管';
   const what = {P: '放水', A: '重新放水', M: '割草', C: '砍', S: '割回草地（两只手）', F: '砍成柴林（两只手）'}[c.t];
   const here = SP.filter(sp => (x + ',' + y) in pop[sp]).map(sp => ICON[sp] + NAME[sp]);
